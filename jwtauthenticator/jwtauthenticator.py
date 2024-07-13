@@ -4,7 +4,8 @@ from jupyterhub.auth import LocalAuthenticator
 from jupyterhub.utils import url_path_join
 from tornado import gen, web
 from traitlets import Unicode, Bool
-from jose import jwt
+from jose import jwt, JWTError
+import requests
 
 class JSONWebTokenLoginHandler(BaseHandler):
 
@@ -16,6 +17,7 @@ class JSONWebTokenLoginHandler(BaseHandler):
         auth_header_content = self.request.headers.get(header_name, "")
         auth_cookie_content = self.get_cookie("XSRF-TOKEN", "")
         signing_certificate = self.authenticator.signing_certificate
+        jwks_url = self.authenticator.jwks_url
         secret = self.authenticator.secret
         username_claim_field = self.authenticator.username_claim_field
         audience = self.authenticator.expected_audience
@@ -43,6 +45,8 @@ class JSONWebTokenLoginHandler(BaseHandler):
             claims = self.verify_jwt_using_secret(token, secret, audience)
         elif signing_certificate:
             claims = self.verify_jwt_with_claims(token, signing_certificate, audience)
+        elif jwks_url:
+            claims = self.verify_jwt_with_jwks(token, jwks_url, audience)
         else:
            raise web.HTTPError(401)
 
@@ -78,6 +82,34 @@ class JSONWebTokenLoginHandler(BaseHandler):
         return jwt.decode(json_web_token, secret, algorithms=list(jwt.ALGORITHMS.SUPPORTED), audience=audience, options=opts)
 
     @staticmethod
+    def verify_jwt_with_jwks(token, jwks_url, audience):
+        # If no audience is supplied then assume we're not verifying the audience field.
+        opts = {"verify_aud": False} if audience == "" else {}
+        # Retrieve the JWKS from the URL
+        jwks = JSONWebTokenLoginHandler.retrieve_jwks(jwks_url)
+        # Decode the JWT header to get the kid
+        header = jwt.get_unverified_header(token)
+        kid = header['kid']
+        # Find the key in the JWK set that matches the kid
+        key = next((key for key in jwks['keys'] if key['kid'] == kid), None)
+        if not key:
+            raise Exception("Public key not found in JWK set")
+        # Convert the key to the format required by python-jose
+        public_key = {
+            'kty': key['kty'],
+            'kid': key['kid'],
+            'use': key['use'],
+            'n': key['n'],
+            'e': key['e']
+        }
+        # Verify the JWT
+        try:
+            return jwt.decode(token, public_key, algorithms=list(jwt.ALGORITHMS.SUPPORTED), audience=audience, options=opts)
+        except JWTError as e:
+            print("Invalid token:", str(e))
+            return {}
+
+    @staticmethod
     def retrieve_username(claims, username_claim_field):
         # retrieve the username from the claims
         username = claims[username_claim_field]
@@ -88,6 +120,11 @@ class JSONWebTokenLoginHandler(BaseHandler):
         else:
             # assume not username and return the user
             return username
+
+    @staticmethod
+    def retrieve_jwks(jwk_url: str):
+        response = requests.get(jwk_url)
+        return response.json()
 
 
 class JSONWebTokenAuthenticator(Authenticator):
@@ -100,6 +137,14 @@ class JSONWebTokenAuthenticator(Authenticator):
         The public certificate of the private key used to sign the incoming JSON Web Tokens.
 
         Should be a path to an X509 PEM format certificate filesystem.
+        """
+    )
+
+    jwks_url = Unicode(
+        config=True,
+        help="""
+        The URL of the JWKS endpoint that contains the public keys used to verify the
+        incoming JSON Web Tokens.
         """
     )
 
