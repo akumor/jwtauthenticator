@@ -10,6 +10,7 @@ import requests
 class JSONWebTokenLoginHandler(BaseHandler):
 
     def get(self):
+        self.log.info("Called JSONWebTokenLoginHandler.get")
         header_name = self.authenticator.header_name
         param_name = self.authenticator.param_name
         header_is_authorization = self.authenticator.header_is_authorization
@@ -24,36 +25,50 @@ class JSONWebTokenLoginHandler(BaseHandler):
         tokenParam = self.get_argument(param_name, default=False)
 
         if auth_header_content and tokenParam:
-           raise web.HTTPError(400)
+            self.log.info("JSONWebTokenLoginHandler | 400 auth_header_content and tokenParam")
+            raise web.HTTPError(400)
         elif auth_header_content:
-           if header_is_authorization:
-              # we should not see "token" as first word in the AUTHORIZATION header, if we do it could mean someone coming in with a stale API token
-              if auth_header_content.split()[0] != "bearer":
-                 raise web.HTTPError(403)
-              token = auth_header_content.split()[1]
-           else:
-              token = auth_header_content
+            self.log.info("JSONWebTokenLoginHandler | token auth_header_content")
+            if header_is_authorization:
+                self.log.info("JSONWebTokenLoginHandler | token auth_header_content header_is_authorization")
+                # we should not see "token" as first word in the AUTHORIZATION header, if we do it could mean someone coming in with a stale API token
+                if auth_header_content.split()[0] != "bearer":
+                    self.log.info("JSONWebTokenLoginHandler | token auth_header_content 403 not bearer")
+                    raise web.HTTPError(403)
+                token = auth_header_content.split()[1]
+            else:
+                self.log.info("JSONWebTokenLoginHandler | token auth_header_content else")
+                token = auth_header_content
         elif auth_cookie_content:
-           token = auth_cookie_content
+            self.log.info("JSONWebTokenLoginHandler | token auth_cookie_content")
+            token = auth_cookie_content
         elif tokenParam:
-           token = tokenParam
+            self.log.info("JSONWebTokenLoginHandler | token tokenParam")
+            token = tokenParam
         else:
-           raise web.HTTPError(401)
+            self.log.info("JSONWebTokenLoginHandler | 401 err no auth")
+            raise web.HTTPError(401)
 
-        claims = "";
+        claims = ""
         if secret:
+            self.log.info("JSONWebTokenLoginHandler | secret claims")
             claims = self.verify_jwt_using_secret(token, secret, audience)
         elif signing_certificate:
+            self.log.info("JSONWebTokenLoginHandler | signing_certificate claims")
             claims = self.verify_jwt_with_claims(token, signing_certificate, audience)
         elif jwks_url:
+            self.log.info("JSONWebTokenLoginHandler | jwks_url claims")
             claims = self.verify_jwt_with_jwks(token, jwks_url, audience)
         else:
-           raise web.HTTPError(401)
+            self.log.info("JSONWebTokenLoginHandler | 401 err no claims")
+            raise web.HTTPError(401)
 
+        self.log.info("JSONWebTokenLoginHandler | set login cookie")
         username = self.retrieve_username(claims, username_claim_field)
         user = self.user_from_username(username)
         self.set_login_cookie(user)
 
+        self.log.info("JSONWebTokenLoginHandler | redirecting to /home")
         _url = url_path_join(self.hub.server.base_url, 'home')
         next_url = self.get_argument('next', default=False)
         if next_url:
@@ -106,7 +121,7 @@ class JSONWebTokenLoginHandler(BaseHandler):
         try:
             return jwt.decode(token, public_key, algorithms=list(jwt.ALGORITHMS.SUPPORTED), audience=audience, options=opts)
         except JWTError as e:
-            print("Invalid token:", str(e))
+            self.log.error("Invalid token: "+str(e))
             return {}
 
     @staticmethod
